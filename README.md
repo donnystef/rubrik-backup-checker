@@ -39,11 +39,11 @@ Buka file `rubrik_checker.py` dan sesuaikan bagian CONFIG:
 
 ```python
 CONFIG = {
-    "rubrik_url": "https://192.168.115.136",   # URL Rubrik kamu
+    "rubrik_url": "https://xxx.xxx.xx.xx",   # URL Rubrik kamu
     "rubrik_username": "admin",                 # Username Rubrik
     "rubrik_password": "password123",           # Password Rubrik
-    "spreadsheet_name": "Tracker Backup Rubrik_Juni 2026",
-    "sheet_tab": "Backup Daily",
+    "spreadsheet_name": "Backup Daily",
+    "sheet_tab": "Backup",
     "service_account_file": "service_account.json",
     ...
 }
