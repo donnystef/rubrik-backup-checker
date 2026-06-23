@@ -49,11 +49,11 @@ Edit `CONFIG` di `rubrik_checker.py` untuk menyesuaikan nama spreadsheet, tab, d
 
 ```python
 CONFIG = {
-        "rubrik_base_url": "https://bankbri.my.rubrik.com",
-        "rubrik_report_url": "https://bankbri.my.rubrik.com/reports/299",
-        "spreadsheet_name": "Rubrik Backup",
-        "sheet_tab": "Backup",
-        "service_account_file": "service_account_v2.json",
+        "rubrik_base_url": "#######",
+        "rubrik_report_url": "##########",
+        "spreadsheet_name": "#########",
+        "sheet_tab": "###########",
+        "service_account_file": "##########.json",
         "col_db_name_idx": 3,
         "col_ip_rubrik_idx": 2,
         "header_row": 1,
@@ -93,12 +93,12 @@ CONFIG = {
 ## ✅ Contoh Output (Dry Run)
 
 ```
-🔍 [ 10] SIKP_KPP_PROSES  (IP: 192.168.53.100)
+🔍 [ 10] SIKP_KPP_PROSES  (IP: ###.###.##.###)
      ⌨️  Search: 'SIKP_KPP_PROSES'
      🔎 0 baris ditemukan
      🔎 Retry → 1 baris
-     Row: ['Rubrik_BRI_Cluster', 'Backup', 'Succeeded', '192.168.53.100\\MSSQLSERVER', 'N/A', 'SIKP_KPP_PROSES', 'SQL Server DB', '06/24/2026 12:00:28 AM', ...]
-     ✔ Match! Status='Succeeded' | Location='192.168.53.100\\MSSQLSERVER' | Start='06/24/2026 12:00:28 AM' → 2026-06-24
+     Row: ['Rubrik_BRI_Cluster', 'Backup', 'Succeeded', '###.###.##.###\\MSSQLSERVER', 'N/A', 'SIKP_KPP_PROSES', 'SQL Server DB', '06/24/2026 12:00:28 AM', ...]
+     ✔ Match! Status='Succeeded' | Location='###.###.##.###\\MSSQLSERVER' | Start='06/24/2026 12:00:28 AM' → 2026-06-24
              → Start 2026-06-24 = hari ini → tulis ke kolom #32
      [DRY RUN] Row 10, Col 32 ← 'DONE BACKUP'
 ```
@@ -122,14 +122,4 @@ Tambahkan format lain di `parse_start_date()` jika Rubrik Anda memakai format be
 - "Kolom untuk tanggal XXX tidak ditemukan" → periksa header (harus berisi hari + bulan).
 - "Format Start tidak dikenali" → lihat log, lalu tambahkan format di `parse_start_date()`.
 - "Quota 429" → tambahkan delay `write_delay_sec` di `CONFIG`.
-
----
-
-## 🎯 Contributing
-
-Jika ingin mempercantik README lebih lanjut (tema gelap, gambar, atau demo gif), kirim PR!
-
----
-
-Made with ❤️ and Playwright by the Backup Squad
 
