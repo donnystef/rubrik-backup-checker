@@ -2,13 +2,14 @@
 Rubrik Backup Checker
 - Search DB via search box "Search object name and location"
 - Cocokkan Location dengan IP Rubrik dari kolom B spreadsheet
+- Tulis hasil ke kolom berdasarkan START DATE backup (bukan tanggal script jalan)
 - Batch update Google Sheets (hindari quota 429)
 """
 
 import asyncio
 import sys
 import time
-from datetime import date
+from datetime import datetime, date
 from pathlib import Path
 
 import gspread
@@ -24,9 +25,9 @@ CONFIG = {
     "rubrik_report_url": "https://bankbri.my.rubrik.com/reports/299",
 
     # === GOOGLE SHEETS ===
-    "spreadsheet_name": "Rubrik Backup",
-    "sheet_tab": "Backup",
-    "service_account_file": "service_account.json",
+    "spreadsheet_name": "########",
+    "sheet_tab": "######",
+    "service_account_file": "###########.json",
 
     # === KOLOM SPREADSHEET (1-based) ===
     "col_db_name_idx": 3,       # Kolom C = Database Name
@@ -41,14 +42,78 @@ CONFIG = {
     "failed_value": "FAILED",
 
     # === ANTI QUOTA (Google Sheets ~60 write/min) ===
-    "write_delay_sec": 0,    # Tidak dipakai lagi (realtime write)
+    "write_delay_sec": 0,
 
-    "dry_run": False,         # True = tidak update sheet, hanya print
+    "dry_run": False,           # True = tidak update sheet, hanya print
     "debug_limit": None,        # Jumlah DB yang diproses — set None untuk semua
 }
 # ─────────────────────────────────────────────
 
-# ── Write langsung per DB (real-time, bukan batch) ──
+
+# ─────────────────────────────────────────────
+# HELPER: PARSE TANGGAL START DARI RUBRIK
+# ─────────────────────────────────────────────
+def parse_start_date(start_str: str) -> date | None:
+    """
+    Parse kolom Start dari tabel Rubrik menjadi objek date.
+
+    Format yang didukung (tambahkan sesuai format aktual di Rubrik kamu):
+      - "Jun 23, 2025, 11:00 PM"
+      - "Jun 23, 2025 11:00 PM"
+      - "2025-06-23 23:00:00"
+      - "23/06/2025 23:00"
+      - "06/23/2025 23:00"
+      - "23 Jun 2025 23:00"
+
+    Tips: jalankan dulu dengan debug_limit=1 dan lihat print row-nya
+    untuk tahu format exact yang dipakai Rubrik kamu.
+    """
+    if not start_str or not start_str.strip():
+        return None
+
+    clean = start_str.strip()
+
+    formats = [
+        "%b %d, %Y, %I:%M:%S %p", # Jun 23, 2025, 11:00:00 PM
+        "%b %d, %Y, %I:%M %p",   # Jun 23, 2025, 11:00 PM
+        "%b %d, %Y, %I:%M%p",    # Jun 23, 2025, 11:00PM
+        "%b %d, %Y %I:%M:%S %p", # Jun 23, 2025 11:00:00 PM
+        "%b %d, %Y %I:%M %p",    # Jun 23, 2025 11:00 PM
+        "%b %d, %Y %I:%M%p",     # Jun 23, 2025 11:00PM
+        "%b %d, %Y, %H:%M:%S",   # Jun 23, 2025, 23:00:00
+        "%b %d, %Y, %H:%M",      # Jun 23, 2025, 23:00
+        "%b %d, %Y %H:%M:%S",    # Jun 23, 2025 23:00:00
+        "%b %d, %Y %H:%M",       # Jun 23, 2025 23:00
+        "%Y-%m-%d %H:%M:%S",     # 2025-06-23 23:00:00
+        "%Y-%m-%dT%H:%M:%S",     # 2025-06-23T23:00:00
+        "%Y-%m-%d %H:%M",        # 2025-06-23 23:00
+        "%d/%m/%Y %H:%M:%S",     # 23/06/2025 23:00:00
+        "%d/%m/%Y %H:%M",        # 23/06/2025 23:00
+        "%m/%d/%Y %H:%M:%S",     # 06/23/2025 23:00:00
+        "%m/%d/%Y %H:%M",        # 06/23/2025 23:00
+        "%d/%m/%Y %I:%M:%S %p",  # 23/06/2025 11:00:00 PM
+        "%d/%m/%Y %I:%M %p",     # 23/06/2025 11:00 PM
+        "%m/%d/%Y %I:%M:%S %p",  # 06/23/2025 11:00:00 PM  ← FORMAT BARU UNTUK LOG MU
+        "%m/%d/%Y %I:%M %p",     # 06/23/2025 11:00 PM
+        "%d %b %Y %H:%M:%S",     # 23 Jun 2025 23:00:00
+        "%d %b %Y %H:%M",        # 23 Jun 2025 23:00
+        "%d %b %Y, %H:%M:%S",    # 23 Jun 2025, 23:00:00
+        "%d %b %Y, %H:%M",       # 23 Jun 2025, 23:00
+    ]
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(clean, fmt).date()
+        except ValueError:
+            continue
+
+    print(f"   ⚠️  Format Start tidak dikenali: '{start_str}' — pakai kolom hari ini sebagai fallback")
+    return None
+
+
+# ─────────────────────────────────────────────
+# WRITE CELL (real-time, retry on 429)
+# ─────────────────────────────────────────────
 def write_cell(sheet, row: int, col: int, value: str):
     """Tulis langsung ke sheet, retry kalau kena 429."""
     if CONFIG["dry_run"]:
@@ -78,11 +143,9 @@ async def rubrik_login(page: Page) -> bool:
     try:
         await page.goto(CONFIG["rubrik_report_url"], wait_until="domcontentloaded", timeout=60000)
 
-        # Tunggu halaman settle dulu sebelum cek apapun
         await page.wait_for_timeout(3000)
         sys.stdin.flush()
 
-        # Selalu minta konfirmasi manual — biar user bisa login dulu
         print("")
         print("=" * 55)
         print("  🔐 LOGIN MANUAL")
@@ -95,7 +158,6 @@ async def rubrik_login(page: Page) -> bool:
         input("  ✅ Tekan ENTER setelah halaman report sudah terbuka... ")
         sys.stdin.flush()
 
-        # Tunggu konten halaman benar-benar siap
         try:
             await page.wait_for_load_state("networkidle", timeout=30000)
         except:
@@ -147,14 +209,27 @@ async def clear_search(page: Page):
 
 async def search_db_in_rubrik(page: Page, db_name: str, ip_rubrik: str) -> dict:
     """
-    Cari DB via search box di tabel Protection Tasks Details (kotak merah).
-    Kolom tabel: Cluster | Task Type | Task Status | Location | Object Name | Object Type | Start | End | Duration | Snapshot
+    Cari DB via search box di tabel Protection Tasks Details.
+
+    Kolom tabel Rubrik (0-based index):
+      0 = Cluster
+      1 = Task Type
+      2 = Task Status      ← dipakai untuk status
+      3 = Location         ← dipakai untuk validasi IP
+      4 = Object Name      ← dipakai untuk validasi nama DB
+      5 = Object Type
+      6 = Start            ← ✅ BARU: dipakai untuk menentukan kolom tanggal
+      7 = End
+      8 = Duration
+      9 = Snapshot
     """
     result = {
         "found": False,
         "status": "",
         "snapshot_type": "",
         "location": "",
+        "start_str": "",        # ✅ BARU: raw string Start dari Rubrik
+        "start_date": None,     # ✅ BARU: parsed date dari kolom Start
     }
 
     try:
@@ -163,7 +238,6 @@ async def search_db_in_rubrik(page: Page, db_name: str, ip_rubrik: str) -> dict:
             print(f"   ⚠️  Search box tidak ditemukan!")
             return result
 
-        # Triple click → fill + dispatch event
         await inp.scroll_into_view_if_needed()
         await inp.click(click_count=3)
         await page.wait_for_timeout(100)
@@ -175,10 +249,8 @@ async def search_db_in_rubrik(page: Page, db_name: str, ip_rubrik: str) -> dict:
 
         print(f"   ⌨️  Search: '{db_name}'")
 
-        # Tunggu hasil filter
         await page.wait_for_timeout(1200)
 
-        # Baca baris via JavaScript (div[role="row/cell"] — Rubrik bukan <table>)
         rows_data = await page.evaluate("""() => {
             const result = [];
             const rows = document.querySelectorAll('div[role="row"]');
@@ -218,19 +290,19 @@ async def search_db_in_rubrik(page: Page, db_name: str, ip_rubrik: str) -> dict:
         for all_cells_text in rows_data:
             print(f"   Row: {all_cells_text}")
 
-            # Cari baris yang mengandung nama DB
             db_found = any(db_name.lower() in txt.lower() for txt in all_cells_text)
             if not db_found:
                 continue
 
-            # Cek IP kalau ada
             if ip_clean:
                 ip_found = any(ip_clean in txt for txt in all_cells_text)
                 if not ip_found:
                     print(f"   ↳ DB cocok tapi IP '{ip_clean}' tidak ada di row ini")
                     continue
 
-            # Kolom: 0=Cluster, 1=TaskType, 2=TaskStatus, 3=Location, 4=ObjectName
+            # Kolom aktual berdasarkan output terminal:
+            # 0=Cluster, 1=TaskType, 2=TaskStatus, 3=Location, 4=N/A,
+            # 5=ObjectName, 6=ObjectType, 7=Start, 8=End, 9=Duration, 10=Snapshot
             location = all_cells_text[3] if len(all_cells_text) > 3 else ""
             status   = all_cells_text[2] if len(all_cells_text) > 2 else ""
             matched_row = (location, status, all_cells_text)
@@ -245,11 +317,20 @@ async def search_db_in_rubrik(page: Page, db_name: str, ip_rubrik: str) -> dict:
         result["location"] = location
         result["status"]   = status
 
-        # Snapshot Type kolom index 9
-        if len(all_cells_text) > 9:
-            result["snapshot_type"] = all_cells_text[9]
+        # Snapshot Type kolom index 10
+        if len(all_cells_text) > 10:
+            result["snapshot_type"] = all_cells_text[10]
 
-        print(f"   ✔ Match! Status='{status}' | Location='{location}'")
+        # ✅ Start time ada di index 7 (bukan 6 — ada kolom N/A ekstra di index 4)
+        start_str = all_cells_text[7] if len(all_cells_text) > 7 else ""
+        result["start_str"]  = start_str
+        result["start_date"] = parse_start_date(start_str)
+
+        if result["start_date"]:
+            print(f"   ✔ Match! Status='{status}' | Location='{location}' | Start='{start_str}' → {result['start_date']}")
+        else:
+            print(f"   ✔ Match! Status='{status}' | Location='{location}' | Start='{start_str}' (tidak terbaca)")
+
         await clear_search(page)
 
     except PlaywrightTimeout:
@@ -285,31 +366,43 @@ def load_spreadsheet():
     return sheet
 
 
-def find_today_column(sheet):
-    """Cari kolom tanggal hari ini dari header row."""
-    headers = sheet.row_values(CONFIG["header_row"])
-    today = date.today()
+def find_column_by_date(sheet, target_date: date, headers: list) -> int | None:
+    """
+    ✅ BARU: Cari kolom yang headernya cocok dengan target_date.
+    Menerima parameter headers agar tidak perlu API call berulang.
+    Return nilai 1-based index kolom, atau None jika tidak ditemukan.
+    """
     bulan_id = {
         1:"Januari", 2:"Februari", 3:"Maret", 4:"April",
         5:"Mei", 6:"Juni", 7:"Juli", 8:"Agustus",
         9:"September", 10:"Oktober", 11:"November", 12:"Desember"
     }
-    day_str = str(today.day)
-    bulan_full = bulan_id[today.month]
-    bulan_en = today.strftime("%b")
+    day_str    = str(target_date.day)
+    bulan_full = bulan_id[target_date.month]
+    bulan_en   = target_date.strftime("%b")
 
     for idx, header in enumerate(headers):
         h = str(header).strip()
         if (day_str in h and
                 (bulan_full in h or bulan_en in h or
-                 today.strftime("%m/%d") in h or today.strftime("%d/%m") in h)):
-            col_idx = idx + 1
-            print(f"📅 Kolom hari ini: '{h}' (kolom #{col_idx})")
-            return col_idx
+                 target_date.strftime("%m/%d") in h or
+                 target_date.strftime("%d/%m") in h)):
+            return idx + 1  # 1-based
 
-    print(f"⚠️  Kolom untuk {today.strftime('%d %B %Y')} tidak ditemukan.")
-    print(f"   10 header terakhir: {headers[-10:]}")
+    print(f"   ⚠️  Kolom untuk tanggal {target_date.strftime('%d %B %Y')} tidak ditemukan di header.")
     return None
+
+
+def find_today_column(sheet, headers: list) -> int | None:
+    """Cari kolom tanggal hari ini dari header row."""
+    today = date.today()
+    col = find_column_by_date(sheet, today, headers)
+    if col:
+        print(f"📅 Kolom hari ini ({today.strftime('%d %B %Y')}): kolom #{col}")
+    else:
+        print(f"⚠️  Kolom untuk {today.strftime('%d %B %Y')} tidak ditemukan.")
+        print(f"   10 header pertama: {headers[:10]}")
+    return col
 
 
 def get_db_list(sheet, today_col_idx: int) -> list:
@@ -339,20 +432,25 @@ def get_db_list(sheet, today_col_idx: int) -> list:
 # ─────────────────────────────────────────────
 # PROSES UTAMA
 # ─────────────────────────────────────────────
-async def process_all(page: Page, sheet, db_list: list):
+async def process_all(page: Page, sheet, db_list: list, headers: list):
     stats = {"done": 0, "failed": 0, "not_found": 0, "skipped": 0}
+
+    # ✅ Cache kolom per tanggal — hindari API call berulang ke sheet header
+    col_cache: dict[date, int | None] = {}
 
     for item in db_list:
         db_name   = item["db_name"]
         ip_rubrik = item["ip_rubrik"]
         today_val = item["today_value"].upper()
-        today_col = item["today_col_idx"]
+        today_col = item["today_col_idx"]   # fallback jika start_date tidak terbaca
 
-        # Skip jika sudah DONE BACKUP
+        # ── SKIP: kolom hari ini sudah DONE BACKUP ──────────────────────────
+        # Fitur ini TETAP DIPAKAI dan tidak diubah
         if today_val == CONFIG["done_backup_value"].upper():
-            print(f"⏭️  SKIP  [{db_name}]")
+            print(f"⏭️  SKIP  [{db_name}] — sudah DONE BACKUP di kolom hari ini")
             stats["skipped"] += 1
             continue
+        # ────────────────────────────────────────────────────────────────────
 
         print(f"\n🔍 [{item['row']:>3}] {db_name}  (IP: {ip_rubrik})")
 
@@ -362,28 +460,57 @@ async def process_all(page: Page, sheet, db_list: list):
             print(f"       → Tidak ditemukan di Rubrik")
             write_cell(sheet, item["row"], today_col, "NOT FOUND")
             stats["not_found"] += 1
-        else:
-            status = res["status"].lower()
-            loc    = res.get("location", "")
-            is_success = "succeeded" in status
+            continue
 
-            if is_success:
-                label = "✅ DONE (with warnings)" if "warning" in status else "✅ DONE"
-                print(f"       → {label} | {loc}")
-                write_cell(sheet, item["row"], today_col, CONFIG["done_backup_value"])
-                stats["done"] += 1
-            elif "failed" in status:
-                print(f"       → ❌ FAILED | {loc}")
-                write_cell(sheet, item["row"], today_col, CONFIG["failed_value"])
-                stats["failed"] += 1
-            elif "canceled" in status or "cancelled" in status:
-                print(f"       → 🚫 CANCELED | {loc}")
-                write_cell(sheet, item["row"], today_col, "CANCELED")
-                stats["failed"] += 1
+        # ── ✅ VALIDASI TANGGAL: tentukan kolom berdasarkan START DATE ───────
+        start_date = res.get("start_date")   # date | None
+        target_col = today_col               # default: kolom hari ini (fallback)
+
+        if start_date:
+            # Gunakan cache supaya tidak bolak-balik hit API sheets
+            if start_date not in col_cache:
+                col_cache[start_date] = find_column_by_date(sheet, start_date, headers)
+
+            found_col = col_cache[start_date]
+
+            if found_col:
+                target_col = found_col
+                if start_date == date.today():
+                    print(f"       → Start {start_date} = hari ini → tulis ke kolom #{target_col}")
+                else:
+                    print(f"       → Start {start_date} ≠ hari ini → tulis ke kolom #{target_col} (tgl {start_date})")
             else:
-                print(f"       → ❓ Status: {res['status']}")
-                write_cell(sheet, item["row"], today_col, res["status"])
-                stats["failed"] += 1
+                print(f"       → Kolom tgl {start_date} tidak ada di sheet, fallback ke kolom hari ini (#{today_col})")
+        else:
+            print(f"       → Start time tidak terbaca, fallback ke kolom hari ini (#{today_col})")
+        # ────────────────────────────────────────────────────────────────────
+
+        # ── Tulis hasil berdasarkan status Rubrik ───────────────────────────
+        status     = res["status"].lower()
+        loc        = res.get("location", "")
+        is_success = "succeeded" in status
+
+        if is_success:
+            label = "✅ DONE (with warnings)" if "warning" in status else "✅ DONE"
+            print(f"       → {label} | {loc}")
+            write_cell(sheet, item["row"], target_col, CONFIG["done_backup_value"])
+            stats["done"] += 1
+
+        elif "failed" in status:
+            print(f"       → ❌ FAILED | {loc}")
+            write_cell(sheet, item["row"], target_col, CONFIG["failed_value"])
+            stats["failed"] += 1
+
+        elif "canceled" in status or "cancelled" in status:
+            print(f"       → 🚫 CANCELED | {loc}")
+            write_cell(sheet, item["row"], target_col, "CANCELED")
+            stats["failed"] += 1
+
+        else:
+            print(f"       → ❓ Status tidak dikenal: '{res['status']}'")
+            write_cell(sheet, item["row"], target_col, res["status"])
+            stats["failed"] += 1
+        # ────────────────────────────────────────────────────────────────────
 
     return stats
 
@@ -405,7 +532,11 @@ async def main():
         print(f"\n❌ {e}")
         sys.exit(1)
 
-    today_col_idx = find_today_column(sheet)
+    # ✅ Ambil headers SEKALI di awal — dipakai oleh find_column_by_date (cache-friendly)
+    headers = sheet.row_values(CONFIG["header_row"])
+    print(f"📋 Header row diambil ({len(headers)} kolom)")
+
+    today_col_idx = find_today_column(sheet, headers)
     if today_col_idx is None:
         print("❌ Tidak bisa lanjut — kolom hari ini tidak ditemukan.")
         sys.exit(1)
@@ -415,8 +546,6 @@ async def main():
         print("ℹ️  Tidak ada database yang perlu diproses.")
         return
 
-    # ── DEBUG MODE: proses hanya 1 DB pertama ──
-    # Hapus atau comment baris ini kalau sudah OK
     if CONFIG.get("debug_limit"):
         db_list = db_list[:CONFIG["debug_limit"]]
         print(f"⚠️  DEBUG MODE: hanya proses {len(db_list)} DB pertama\n")
@@ -437,7 +566,8 @@ async def main():
             if not ok:
                 return
 
-            stats = await process_all(page, sheet, db_list)
+            # ✅ Pass headers ke process_all agar find_column_by_date bisa dipakai
+            stats = await process_all(page, sheet, db_list, headers)
 
             print("\n" + "=" * 55)
             print("  SELESAI")
