@@ -1,5 +1,3 @@
----
-
 # Rubrik Backup Checker 🔍✨
 
 > Automasi estetis untuk memeriksa status backup database di Rubrik dan
