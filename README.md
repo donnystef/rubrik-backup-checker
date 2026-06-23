@@ -1,116 +1,137 @@
-# Rubrik Backup Checker 🔍
+---
 
-Script otomatis untuk cek status backup database di Rubrik dan update Google Sheets.
+# Rubrik Backup Checker 🔍✨
+
+> Automasi estetis untuk memeriksa status backup database di Rubrik dan
+> meng-update Google Sheets berdasarkan tanggal START backup.
 
 ---
 
-## Cara Kerja
-
-1. Baca list DB dari Google Sheets tab "Backup Daily"
-2. Login ke Rubrik via browser (Playwright)
-3. Cari setiap DB di halaman Reports → Protection Tasks Details
-4. Jika sudah ter-backup hari ini → update cell jadi **DONE BACKUP**
-5. Jika belum / gagal → update cell sesuai statusnya
+![status](https://img.shields.io/badge/status-ready-brightgreen)
+![python](https://img.shields.io/badge/python-3.10%2B-blue)
+![playwright](https://img.shields.io/badge/playwright-automation-purple)
 
 ---
 
-## Setup (Lakukan Sekali)
+## ✨ Highlights
 
-### 1. Install Python dependencies
+- Menentukan kolom tujuan berdasarkan **START TIME** backup, bukan tanggal eksekusi.
+- Mendukung berbagai format tanggal dari Rubrik.
+- Mode `dry_run` untuk simulasi sebelum update nyata.
+- Cache header untuk mengurangi panggilan API Google Sheets.
+
+---
+
+## 🧭 Cara Kerja (Singkat)
+
+1. Ambil daftar DB dari Google Sheets (Kolom B = IP Rubrik, Kolom C = Database Name).
+2. Buka browser via Playwright dan login manual ke halaman report Rubrik.
+3. Untuk setiap DB: cari di tabel, cocokkan nama + IP, ambil `Start` dan `Status`.
+4. Parse `Start` → temukan kolom spreadsheet yang sesuai → tulis hasil (DONE/FAILED/...).
+
+---
+
+## 🛠️ Setup
+
+Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 playwright install chromium
 ```
 
-### 2. Buat Google Service Account
+Siapkan Google Service Account (JSON) dan share spreadsheet ke `client_email`.
+Letakkan file credentials di folder project dan update `CONFIG['service_account_file']`.
 
-1. Buka https://console.cloud.google.com
-2. Buat project baru (atau pakai yang ada)
-3. Enable **Google Sheets API** dan **Google Drive API**
-4. Buat **Service Account** → buat key → download sebagai `service_account.json`
-5. Taruh file `service_account.json` di folder yang sama dengan script ini
-6. **Penting:** Share spreadsheet kamu ke email service account (ada di file json, field `client_email`)
-   dengan akses **Editor**
+---
 
-### 3. Edit CONFIG di `rubrik_checker.py`
+## ⚙️ Konfigurasi (CONFIG)
 
-Buka file `rubrik_checker.py` dan sesuaikan bagian CONFIG:
+Edit `CONFIG` di `rubrik_checker.py` untuk menyesuaikan nama spreadsheet, tab, dan mode:
 
 ```python
 CONFIG = {
-    "rubrik_url": "https://xxx.xxx.xx.xx",   # URL Rubrik kamu
-    "rubrik_username": "admin",                 # Username Rubrik
-    "rubrik_password": "password123",           # Password Rubrik
-    "spreadsheet_name": "Backup Daily",
-    "sheet_tab": "Backup",
-    "service_account_file": "service_account.json",
-    ...
+        "rubrik_base_url": "https://bankbri.my.rubrik.com",
+        "rubrik_report_url": "https://bankbri.my.rubrik.com/reports/299",
+        "spreadsheet_name": "Rubrik Backup",
+        "sheet_tab": "Backup",
+        "service_account_file": "service_account_v2.json",
+        "col_db_name_idx": 3,
+        "col_ip_rubrik_idx": 2,
+        "header_row": 1,
+        "data_start_row": 2,
+        "dry_run": False,
 }
 ```
 
 ---
 
-## Cara Menjalankan
+## 🧩 Logic Detail (Aesthetic Breakdown)
 
-```bash
-python rubrik_checker.py
+- Search & Retry:
+
+    - Isi search box dengan nama DB.
+    - Tunggu 1.2s, jika 0 baris → tunggu 1.5s dan retry 1x.
+
+- Matching:
+
+    - Pastikan nama DB cocok (case-insensitive).
+    - Pastikan IP Rubrik muncul di kolom Location.
+
+- Extract & Parse Start:
+
+    - Ambil kolom `Start` (index 7 pada scraped row).
+    - Fungsi `parse_start_date()` mencoba banyak format (termasuk `%m/%d/%Y %I:%M:%S %p`).
+    - Jika tidak ter-parse → log warning dan fallback ke kolom hari ini.
+
+- Pilih Kolom:
+
+    - `find_column_by_date()` mencari header yang mengandung `day` + `month` (Indonesia/English) atau `MM/DD`.
+    - Jika ditemukan → tulis ke kolom tersebut.
+    - Jika tidak → fallback ke kolom hari ini.
+
+---
+
+## ✅ Contoh Output (Dry Run)
+
+```
+🔍 [ 10] SIKP_KPP_PROSES  (IP: 192.168.53.100)
+     ⌨️  Search: 'SIKP_KPP_PROSES'
+     🔎 0 baris ditemukan
+     🔎 Retry → 1 baris
+     Row: ['Rubrik_BRI_Cluster', 'Backup', 'Succeeded', '192.168.53.100\\MSSQLSERVER', 'N/A', 'SIKP_KPP_PROSES', 'SQL Server DB', '06/24/2026 12:00:28 AM', ...]
+     ✔ Match! Status='Succeeded' | Location='192.168.53.100\\MSSQLSERVER' | Start='06/24/2026 12:00:28 AM' → 2026-06-24
+             → Start 2026-06-24 = hari ini → tulis ke kolom #32
+     [DRY RUN] Row 10, Col 32 ← 'DONE BACKUP'
 ```
 
-Browser Chromium akan terbuka otomatis, login ke Rubrik, lalu mulai cek satu per satu.
+---
 
-### Mode Test (Dry Run)
-Tidak akan mengubah spreadsheet, hanya print hasilnya:
+## 📝 Supported Date Formats
 
-```python
-# Di CONFIG, ubah:
-"dry_run": True,
-```
+- `%m/%d/%Y %I:%M:%S %p`  (e.g. `06/23/2026 11:04:10 PM`)
+- `%m/%d/%Y %I:%M %p`     (e.g. `06/23/2026 11:04 PM`)
+- `%d/%m/%Y %H:%M:%S`     (e.g. `23/06/2026 23:00:00`)
+- `%Y-%m-%d %H:%M:%S`     (e.g. `2026-06-23 23:00:00`)
+- `Jun 23, 2026, 11:00 PM` and other common variations
+
+Tambahkan format lain di `parse_start_date()` jika Rubrik Anda memakai format berbeda.
 
 ---
 
-## Struktur Kolom Spreadsheet
+## ⚠️ Troubleshooting Quick Tips
 
-| Kolom | Isi                  |
-|-------|----------------------|
-| A     | IP Server            |
-| B     | IP Rubrik            |
-| C     | Database Name ← sumber nama DB |
-| D     | Shot Date            |
-| E     | Backup Date          |
-| F     | Insert Date          |
-| G     | SLA Name             |
-| H     | Backup Status        |
-| I+    | Status per tanggal (01 Juni, 02 Juni, dst.) |
-| Q     | 10 Juni (kolom hari ini — otomatis terdeteksi) |
-
-Script akan otomatis mendeteksi kolom hari ini berdasarkan header tanggal di baris 1.
+- "Kolom untuk tanggal XXX tidak ditemukan" → periksa header (harus berisi hari + bulan).
+- "Format Start tidak dikenali" → lihat log, lalu tambahkan format di `parse_start_date()`.
+- "Quota 429" → tambahkan delay `write_delay_sec` di `CONFIG`.
 
 ---
 
-## Status yang Ditulis ke Sheet
+## 🎯 Contributing
 
-| Status         | Arti                                          |
-|----------------|-----------------------------------------------|
-| `DONE BACKUP`  | Backup berhasil hari ini                      |
-| `ON PROGRESS`  | Sedang dicek (sementara, akan diupdate)       |
-| `FAILED`       | Backup gagal di Rubrik                        |
-| `NOT FOUND`    | DB tidak ditemukan di laporan Rubrik          |
-| `OLD: YYYY-MM` | Backup ada tapi bukan hari ini                |
+Jika ingin mempercantik README lebih lanjut (tema gelap, gambar, atau demo gif), kirim PR!
 
 ---
 
-## Troubleshooting
+Made with ❤️ and Playwright by the Backup Squad
 
-**Login gagal?**
-- Cek URL Rubrik di CONFIG (https atau http?)
-- Rubrik biasanya self-signed cert — sudah ada `ignore_https_errors=True`
-- Coba buka URL Rubrik manual di browser dulu
-
-**Sheet tidak bisa diakses?**
-- Pastikan file `service_account.json` ada di folder yang sama
-- Pastikan email service account sudah di-share ke spreadsheet sebagai Editor
-
-**DB tidak ditemukan di Rubrik?**
-- Cek apakah nama di spreadsheet sama persis dengan yang di Rubrik
-- Coba cari manual di Rubrik untuk konfirmasi nama yang benar
