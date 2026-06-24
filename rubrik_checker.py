@@ -21,8 +21,8 @@ from playwright.async_api import async_playwright, Page, TimeoutError as Playwri
 # ─────────────────────────────────────────────
 CONFIG = {
     # === RUBRIK ===
-    "rubrik_base_url": "https://bankbri.my.rubrik.com",
-    "rubrik_report_url": "https://bankbri.my.rubrik.com/reports/299",
+    "rubrik_base_url": "https://bank###.my.rubrik.com",
+    "rubrik_report_url": "https://bank###.my.rubrik.com/reports/###",
 
     # === GOOGLE SHEETS ===
     "spreadsheet_name": "########",
