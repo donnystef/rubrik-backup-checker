@@ -97,7 +97,7 @@ CONFIG = {
      ⌨️  Search: 'SIKP_KPP_PROSES'
      🔎 0 baris ditemukan
      🔎 Retry → 1 baris
-     Row: ['Rubrik_BRI_Cluster', 'Backup', 'Succeeded', '###.###.##.###\\MSSQLSERVER', 'N/A', 'SIKP_KPP_PROSES', 'SQL Server DB', '06/24/2026 12:00:28 AM', ...]
+     Row: ['Rubrik_B##_Cluster', 'Backup', 'Succeeded', '###.###.##.###\\MSSQLSERVER', 'N/A', 'SIKP_KPP_PROSES', 'SQL Server DB', '06/24/2026 12:00:28 AM', ...]
      ✔ Match! Status='Succeeded' | Location='###.###.##.###\\MSSQLSERVER' | Start='06/24/2026 12:00:28 AM' → 2026-06-24
              → Start 2026-06-24 = hari ini → tulis ke kolom #32
      [DRY RUN] Row 10, Col 32 ← 'DONE BACKUP'
